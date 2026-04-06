@@ -188,6 +188,14 @@ extension MEPlayerItem {
 //            0
 //        }
         setHttpProxy()
+        // probesize/maxAnalyzeDuration must be set BEFORE avformat_open_input,
+        // otherwise FFmpeg uses default 5MB probesize which hangs on slow/proxy URLs.
+        if let probesize = options.probesize {
+            formatCtx.pointee.probesize = probesize
+        }
+        if let maxAnalyzeDuration = options.maxAnalyzeDuration {
+            formatCtx.pointee.max_analyze_duration = maxAnalyzeDuration
+        }
         var avOptions = options.formatContextOptions.avOptions
         if let pb = options.process(url: url) {
             // 如果要自定义协议的话，那就用avio_alloc_context，对formatCtx.pointee.pb赋值
@@ -215,12 +223,6 @@ extension MEPlayerItem {
         formatCtx.pointee.flags |= AVFMT_FLAG_GENPTS
         if options.nobuffer {
             formatCtx.pointee.flags |= AVFMT_FLAG_NOBUFFER
-        }
-        if let probesize = options.probesize {
-            formatCtx.pointee.probesize = probesize
-        }
-        if let maxAnalyzeDuration = options.maxAnalyzeDuration {
-            formatCtx.pointee.max_analyze_duration = maxAnalyzeDuration
         }
         result = avformat_find_stream_info(formatCtx, nil)
         guard result == 0 else {
