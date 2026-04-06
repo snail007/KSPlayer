@@ -105,30 +105,31 @@ class FFmpegDecode: DecodeProtocol {
                                 let data = sideData.data.withMemoryRebound(to: AVDynamicHDRVivid.self, capacity: 1) { $0 }.pointee
                             } else if sideData.type == AV_FRAME_DATA_MASTERING_DISPLAY_METADATA {
                                 let data = sideData.data.withMemoryRebound(to: AVMasteringDisplayMetadata.self, capacity: 1) { $0 }.pointee
+                                // MARK: Safe HDR metadata conversion — AVRational.num is Int32, can exceed UInt16.max
                                 displayData = MasteringDisplayMetadata(
-                                    display_primaries_r_x: UInt16(data.display_primaries.0.0.num).bigEndian,
-                                    display_primaries_r_y: UInt16(data.display_primaries.0.1.num).bigEndian,
-                                    display_primaries_g_x: UInt16(data.display_primaries.1.0.num).bigEndian,
-                                    display_primaries_g_y: UInt16(data.display_primaries.1.1.num).bigEndian,
-                                    display_primaries_b_x: UInt16(data.display_primaries.2.1.num).bigEndian,
-                                    display_primaries_b_y: UInt16(data.display_primaries.2.1.num).bigEndian,
-                                    white_point_x: UInt16(data.white_point.0.num).bigEndian,
-                                    white_point_y: UInt16(data.white_point.1.num).bigEndian,
-                                    minLuminance: UInt32(data.min_luminance.num).bigEndian,
-                                    maxLuminance: UInt32(data.max_luminance.num).bigEndian
+                                    display_primaries_r_x: UInt16(clamping: max(0, data.display_primaries.0.0.num)).bigEndian,
+                                    display_primaries_r_y: UInt16(clamping: max(0, data.display_primaries.0.1.num)).bigEndian,
+                                    display_primaries_g_x: UInt16(clamping: max(0, data.display_primaries.1.0.num)).bigEndian,
+                                    display_primaries_g_y: UInt16(clamping: max(0, data.display_primaries.1.1.num)).bigEndian,
+                                    display_primaries_b_x: UInt16(clamping: max(0, data.display_primaries.2.0.num)).bigEndian,
+                                    display_primaries_b_y: UInt16(clamping: max(0, data.display_primaries.2.1.num)).bigEndian,
+                                    white_point_x: UInt16(clamping: max(0, data.white_point.0.num)).bigEndian,
+                                    white_point_y: UInt16(clamping: max(0, data.white_point.1.num)).bigEndian,
+                                    minLuminance: UInt32(clamping: max(0, data.min_luminance.num)).bigEndian,
+                                    maxLuminance: UInt32(clamping: max(0, data.max_luminance.num)).bigEndian
                                 )
                             } else if sideData.type == AV_FRAME_DATA_CONTENT_LIGHT_LEVEL {
                                 let data = sideData.data.withMemoryRebound(to: AVContentLightMetadata.self, capacity: 1) { $0 }.pointee
                                 contentData = ContentLightMetadata(
-                                    MaxCLL: UInt16(data.MaxCLL).bigEndian,
-                                    MaxFALL: UInt16(data.MaxFALL).bigEndian
+                                    MaxCLL: UInt16(clamping: data.MaxCLL).bigEndian,
+                                    MaxFALL: UInt16(clamping: data.MaxFALL).bigEndian
                                 )
                             } else if sideData.type == AV_FRAME_DATA_AMBIENT_VIEWING_ENVIRONMENT {
                                 let data = sideData.data.withMemoryRebound(to: AVAmbientViewingEnvironment.self, capacity: 1) { $0 }.pointee
                                 ambientViewingEnvironment = AmbientViewingEnvironment(
-                                    ambient_illuminance: UInt32(data.ambient_illuminance.num).bigEndian,
-                                    ambient_light_x: UInt16(data.ambient_light_x.num).bigEndian,
-                                    ambient_light_y: UInt16(data.ambient_light_y.num).bigEndian
+                                    ambient_illuminance: UInt32(clamping: max(0, data.ambient_illuminance.num)).bigEndian,
+                                    ambient_light_x: UInt16(clamping: max(0, data.ambient_light_x.num)).bigEndian,
+                                    ambient_light_y: UInt16(clamping: max(0, data.ambient_light_y.num)).bigEndian
                                 )
                             }
                         }
