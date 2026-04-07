@@ -6,10 +6,12 @@
 //
 
 import AVFoundation
+import CoreGraphics
 import Foundation
 import Libavcodec
 import Libavformat
 import Libavutil
+import Libswscale
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -106,7 +108,13 @@ public class ThumbnailController {
             avcodec_free_context(&codecContext)
         }
         let thumbHeight = thumbWidth * codecContext.pointee.height / codecContext.pointee.width
-        let reScale = VideoSwresample(dstWidth: thumbWidth, dstHeight: thumbHeight, isDovi: false)
+        // sws_scale: any format (including 10-bit HDR) → RGB24 for CGImage
+        var swsCtx: OpaquePointer?
+        var rgbFrame = av_frame_alloc()
+        defer {
+            sws_freeContext(swsCtx)
+            av_frame_free(&rgbFrame)
+        }
         // 因为是针对视频流来进行seek。所以不能直接取formatCtx的duration
         let duration = av_rescale_q(formatCtx.pointee.duration,
                                     AVRational(num: 1, den: AV_TIME_BASE), videoStream.pointee.time_base)
@@ -141,8 +149,32 @@ public class ThumbnailController {
                             break
                         }
                     }
-                    let image = reScale.transfer(frame: frame.pointee)?.cgImage().map {
-                        UIImage(cgImage: $0)
+                    let srcFormat = AVPixelFormat(rawValue: frame.pointee.format)
+                    let srcW = frame.pointee.width
+                    let srcH = frame.pointee.height
+                    if swsCtx == nil {
+                        swsCtx = sws_getContext(srcW, srcH, srcFormat,
+                                                thumbWidth, thumbHeight, AV_PIX_FMT_RGB24,
+                                                SWS_FAST_BILINEAR, nil, nil, nil)
+                    }
+                    guard let swsCtx else { break }
+                    if rgbFrame == nil { rgbFrame = av_frame_alloc() }
+                    guard let rgbFrame else { break }
+                    rgbFrame.pointee.format = AV_PIX_FMT_RGB24.rawValue
+                    rgbFrame.pointee.width = thumbWidth
+                    rgbFrame.pointee.height = thumbHeight
+                    if rgbFrame.pointee.data.0 == nil {
+                        av_frame_get_buffer(rgbFrame, 0)
+                    }
+                    var srcData = Array(tuple: frame.pointee.data).map { UnsafePointer<UInt8>($0) }
+                    var srcLinesize = Array(tuple: frame.pointee.linesize)
+                    var dstData = Array(tuple: rgbFrame.pointee.data).map { UnsafeMutablePointer<UInt8>($0) }
+                    var dstLinesize = Array(tuple: rgbFrame.pointee.linesize)
+                    sws_scale(swsCtx, &srcData, &srcLinesize, 0, srcH, &dstData, &dstLinesize)
+                    let image: UIImage? = rgbFrame.pointee.data.0.flatMap { ptr in
+                        CGImage.make(rgbData: ptr, linesize: Int(rgbFrame.pointee.linesize.0),
+                                     width: Int(thumbWidth), height: Int(thumbHeight))
+                            .map { UIImage(cgImage: $0) }
                     }
                     let currentTimeStamp = frame.pointee.best_effort_timestamp
                     if let image {
@@ -155,7 +187,6 @@ public class ThumbnailController {
             }
         }
         av_packet_unref(&packet)
-        reScale.shutdown()
         return thumbnails
     }
 }
