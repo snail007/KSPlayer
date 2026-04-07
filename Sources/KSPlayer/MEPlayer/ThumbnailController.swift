@@ -38,8 +38,10 @@ public class ThumbnailController {
         }.value
     }
 
-    private static let logLock = NSLock()
-    private static var capturedLogs: [String] = []
+    // MARK: - Fallback formats for MIME/extension mismatch
+    // FFmpeg HTTP MIME bonus (+30) can override content-based probing (e.g., server
+    // returns video/x-matroska for MPEG-TS data). No flag to disable it — retry with forced format.
+    private static let fallbackFormats = ["mpegts", "matroska,webm", "avi", "mov,mp4,m4a,3gp,3g2,mj2"]
 
     private func getPeeks(for url: URL, thumbWidth: Int32 = 240) throws -> [FFThumbnail] {
         let urlString: String
@@ -55,32 +57,24 @@ public class ThumbnailController {
         }
         var avOptions = formatContextOptions?.avOptions
 
-        // DEBUG: capture FFmpeg internal logs during avformat_open_input
-        ThumbnailController.logLock.lock()
-        ThumbnailController.capturedLogs.removeAll()
-        ThumbnailController.logLock.unlock()
-        let prevLevel = av_log_get_level()
-        av_log_set_level(AV_LOG_TRACE)
-        av_log_set_callback { _, level, format, args in
-            guard let format else { return }
-            var log = String(cString: format)
-            if let args {
-                log = NSString(format: log, arguments: args) as String
-            }
-            log = log.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !log.isEmpty else { return }
-            ThumbnailController.logLock.lock()
-            ThumbnailController.capturedLogs.append("[\(level)] \(log)")
-            ThumbnailController.logLock.unlock()
-        }
-
         var result = avformat_open_input(&formatCtx, urlString, nil, &avOptions)
-        av_log_set_level(prevLevel)
         av_dict_free(&avOptions)
 
-        ThumbnailController.logLock.lock()
-        debugLogs = ThumbnailController.capturedLogs
-        ThumbnailController.logLock.unlock()
+        if result != 0 {
+            for fmtName in ThumbnailController.fallbackFormats {
+                let forcedFmt = av_find_input_format(fmtName)
+                guard forcedFmt != nil else { continue }
+                avformat_close_input(&formatCtx)
+                formatCtx = avformat_alloc_context()
+                var retryOptions = formatContextOptions?.avOptions
+                result = avformat_open_input(&formatCtx, urlString, forcedFmt, &retryOptions)
+                av_dict_free(&retryOptions)
+                if result == 0 {
+                    debugLogs = ["Fallback format '\(fmtName)' succeeded"]
+                    break
+                }
+            }
+        }
 
         guard result == 0, let formatCtx else {
             throw NSError(errorCode: .formatOpenInput, avErrorCode: result)
