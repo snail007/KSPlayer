@@ -269,7 +269,10 @@ extension MEPlayerItem {
         maxFrameDuration = flags & AVFMT_TS_DISCONT == AVFMT_TS_DISCONT ? 10.0 : 3600.0
         options.findTime = CACurrentMediaTime()
         options.formatName = String(cString: formatCtx.pointee.iformat.pointee.name)
-        seekByBytes = (flags & AVFMT_NO_BYTE_SEEK == 0) && (flags & AVFMT_TS_DISCONT != 0) && options.formatName != "ogg"
+        // Disable byte-seek for MPEG-TS: byte-seek lands on non-keyframe positions,
+        // causing VTB hwaccel decode errors (-12909) and seek stutter.
+        // Time-based seek with AVSEEK_FLAG_BACKWARD targets the nearest prior keyframe.
+        seekByBytes = false
         if formatCtx.pointee.start_time != Int64.min {
             startTime = CMTime(value: formatCtx.pointee.start_time, timescale: AV_TIME_BASE)
             videoClock.time = startTime
