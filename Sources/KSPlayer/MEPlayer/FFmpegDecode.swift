@@ -17,15 +17,9 @@ class FFmpegDecode: DecodeProtocol {
     private let frameChange: FrameChange
     private let filter: MEFilter
     private let seekByBytes: Bool
-    // MARK: After flush (seek), skip non-keyframe video packets for seekByBytes streams (MPEG-TS).
-    // Byte-seek may land on non-keyframe; sending these to FFmpeg hwaccel (VideoToolbox) causes
-    // kVTVideoDecoderBadDataErr (-12909) until the next keyframe arrives, producing visible stutter.
-    private var needKeyFrame = false
-    private let isVideo: Bool
     required init(assetTrack: FFmpegAssetTrack, options: KSOptions) {
         self.options = options
         seekByBytes = assetTrack.seekByBytes
-        isVideo = assetTrack.mediaType == .video
         do {
             codecContext = try assetTrack.createContext(options: options)
         } catch {
@@ -33,7 +27,7 @@ class FFmpegDecode: DecodeProtocol {
         }
         codecContext?.pointee.time_base = assetTrack.timebase.rational
         filter = MEFilter(timebase: assetTrack.timebase, isAudio: assetTrack.mediaType == .audio, nominalFrameRate: assetTrack.nominalFrameRate, options: options)
-        if isVideo {
+        if assetTrack.mediaType == .video {
             frameChange = VideoSwresample(fps: assetTrack.nominalFrameRate, isDovi: assetTrack.dovi != nil)
         } else {
             frameChange = AudioSwresample(audioDescriptor: assetTrack.audioDescriptor!)
@@ -41,14 +35,6 @@ class FFmpegDecode: DecodeProtocol {
     }
 
     func decodeFrame(from packet: Packet, completionHandler: @escaping (Result<MEFrame, Error>) -> Void) {
-        if needKeyFrame, isVideo {
-            if packet.isKeyFrame {
-                needKeyFrame = false
-                KSLog("[video] FFmpegDecode: got keyframe after flush, resuming decode")
-            } else {
-                return
-            }
-        }
         guard let codecContext, avcodec_send_packet(codecContext, packet.corePacket) == 0 else {
             return
         }
@@ -202,10 +188,8 @@ class FFmpegDecode: DecodeProtocol {
 
     func doFlushCodec() {
         bestEffortTimestamp = Int64(0)
+        // seek之后要清空下，不然解码可能还会有缓存，导致返回的数据是之前seek的。
         avcodec_flush_buffers(codecContext)
-        if isVideo, seekByBytes {
-            needKeyFrame = true
-        }
     }
 
     func shutdown() {
