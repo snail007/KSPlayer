@@ -24,8 +24,10 @@ public protocol ThumbnailControllerDelegate: AnyObject {
 public class ThumbnailController {
     public weak var delegate: ThumbnailControllerDelegate?
     private let thumbnailCount: Int
-    public init(thumbnailCount: Int = 100) {
+    private let formatContextOptions: [String: Any]?
+    public init(thumbnailCount: Int = 100, formatContextOptions: [String: Any]? = nil) {
         self.thumbnailCount = thumbnailCount
+        self.formatContextOptions = formatContextOptions
     }
 
     public func generateThumbnail(for url: URL, thumbWidth: Int32 = 240) async throws -> [FFThumbnail] {
@@ -46,7 +48,9 @@ public class ThumbnailController {
         defer {
             avformat_close_input(&formatCtx)
         }
-        var result = avformat_open_input(&formatCtx, urlString, nil, nil)
+        var avOptions = formatContextOptions?.avOptions
+        var result = avformat_open_input(&formatCtx, urlString, nil, &avOptions)
+        av_dict_free(&avOptions)
         guard result == 0, let formatCtx else {
             throw NSError(errorCode: .formatOpenInput, avErrorCode: result)
         }
