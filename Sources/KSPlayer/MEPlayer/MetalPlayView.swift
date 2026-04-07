@@ -71,10 +71,13 @@ public final class MetalPlayView: UIView, VideoOutput {
     private let metalView = MetalView()
     public weak var displayLayerDelegate: DisplayLayerDelegate?
 
-    // MARK: - Diagnostic / fix for black screen when view not yet in window
+    // MARK: - Fix for black screen when SwiftUI detaches/reattaches view
     private var drawLogCounter: Int = 0
     private var pendingPlay = false
-    private var hasLoggedWindowAttach = false
+    /// Tracks whether displayLink was running when view was detached from window.
+    /// When SwiftUI rebuilds the view hierarchy, MetalPlayView gets detached then reattached.
+    /// Without this, displayLink stays paused after reattach and no frames are rendered.
+    private var wasPlayingBeforeDetach = false
 
     public init(options: KSOptions) {
         self.options = options
@@ -90,11 +93,11 @@ public final class MetalPlayView: UIView, VideoOutput {
     }
 
     public func play() {
+        wasPlayingBeforeDetach = false
         if window != nil {
             displayLink.isPaused = false
             pendingPlay = false
         } else {
-            // View not in window yet — defer displayLink start until didMoveToWindow
             pendingPlay = true
             KSLog("[video] MetalPlayView.play() deferred: view not in window yet")
         }
@@ -102,25 +105,29 @@ public final class MetalPlayView: UIView, VideoOutput {
 
     public func pause() {
         pendingPlay = false
+        wasPlayingBeforeDetach = false
         displayLink.isPaused = true
     }
 
     override public func didMoveToWindow() {
         super.didMoveToWindow()
-        if let w = window {
-            if !hasLoggedWindowAttach {
-                KSLog("[video] MetalPlayView didMoveToWindow: attached window=\(w) bounds=\(bounds) frame=\(frame)")
-                hasLoggedWindowAttach = true
-            }
-            if pendingPlay {
+        if window != nil {
+            if pendingPlay || wasPlayingBeforeDetach {
+                let reason = pendingPlay ? "pendingPlay" : "wasPlayingBeforeDetach"
                 pendingPlay = false
+                wasPlayingBeforeDetach = false
                 displayLink.isPaused = false
-                KSLog("[video] MetalPlayView: deferred play() now activated after window attach")
-                // Force render one frame immediately so AVSampleBufferDisplayLayer has content
+                KSLog("[video] MetalPlayView didMoveToWindow: reattached, resuming displayLink reason=\(reason)")
                 draw(force: true)
             }
         } else {
-            KSLog("[video] MetalPlayView didMoveToWindow: detached from window")
+            if !displayLink.isPaused {
+                wasPlayingBeforeDetach = true
+                displayLink.isPaused = true
+                KSLog("[video] MetalPlayView didMoveToWindow: detached, pausing displayLink (wasPlaying=true)")
+            } else {
+                KSLog("[video] MetalPlayView didMoveToWindow: detached (displayLink already paused)")
+            }
         }
     }
 
