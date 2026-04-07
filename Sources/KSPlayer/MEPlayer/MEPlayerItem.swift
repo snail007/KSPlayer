@@ -30,6 +30,8 @@ public final class MEPlayerItem: Sendable {
     private var videoClock = KSClock()
     private var isFirst = true
     private var isSeek = false
+    // MARK: Approach H — block audio until video renders first frame after seek
+    private var isWaitingVideoAfterSeek = false
     private var allPlayerItemTracks = [PlayerItemTrackProtocol]()
     private var maxFrameDuration = 10.0
     private var videoAudioTracks = [CapacityProtocol]()
@@ -536,6 +538,9 @@ extension MEPlayerItem {
                     continue
                 }
                 isSeek = true
+                if videoTrack != nil {
+                    isWaitingVideoAfterSeek = true
+                }
                 allPlayerItemTracks.forEach { $0.seek(time: seekToTime) }
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
@@ -753,6 +758,10 @@ extension MEPlayerItem: CodecCapacityDelegate {
         if track.mediaType == .audio {
             isAudioStalled = true
         }
+        if track.mediaType == .video, isWaitingVideoAfterSeek {
+            isWaitingVideoAfterSeek = false
+            KSLog("[seek] video track finished, unblocking audio")
+        }
         let allSatisfy = videoAudioTracks.allSatisfy { $0.isEndOfFile && $0.frameCount == 0 && $0.packetCount == 0 }
         if allSatisfy {
             delegate?.sourceDidFinished()
@@ -835,10 +844,14 @@ extension MEPlayerItem: OutputRenderSourceDelegate {
             return nil
         }
         var type: ClockProcessType = force ? .next : .remain
-        let predicate: ((VideoVTBFrame, Int) -> Bool)? = force ? nil : { [weak self] frame, count -> Bool in
+        let skipSync = force || isWaitingVideoAfterSeek
+        let predicate: ((VideoVTBFrame, Int) -> Bool)? = skipSync ? nil : { [weak self] frame, count -> Bool in
             guard let self else { return true }
             (self.dynamicInfo.audioVideoSyncDiff, type) = self.options.videoClockSync(main: self.mainClock(), nextVideoTime: frame.seconds, fps: Double(frame.fps), frameCount: count)
             return type != .remain
+        }
+        if isWaitingVideoAfterSeek {
+            type = .next
         }
         let frame = videoTrack.getOutputRender(where: predicate)
         switch type {
@@ -879,10 +892,20 @@ extension MEPlayerItem: OutputRenderSourceDelegate {
                 } while packet != nil
             }
         }
+        if let frame, isWaitingVideoAfterSeek {
+            isWaitingVideoAfterSeek = false
+            let videoTime = frame.cmtime
+            audioClock.time = videoTime
+            videoClock.time = videoTime
+            KSLog("[seek] video first frame at \(videoTime.seconds)s after seek, synced clocks, unblocking audio")
+        }
         return frame
     }
 
     public func getAudioOutputRender() -> AudioFrame? {
+        if isWaitingVideoAfterSeek {
+            return nil
+        }
         if let frame = audioTrack?.getOutputRender(where: nil) {
             SubtitleModel.audioRecognizes.first {
                 $0.isEnabled
