@@ -214,9 +214,42 @@ extension MEPlayerItem {
             delegate?.sourceDidFinished()
             return
         }
+        // Fallback format retry: WebDAV servers return MIME type based on file extension
+        // (e.g. video/x-matroska for .mkv), FFmpeg's MIME bonus (+30) picks wrong demuxer.
+        // When actual content differs (e.g. MPEG-TS in .mkv), EBML parsing fails.
+        // Retry with forced formats — same strategy as ThumbnailController.
+        if result != 0 {
+            let fallbackFormats = ["mpegts", "matroska,webm", "avi", "mov,mp4,m4a,3gp,3g2,mj2"]
+            for fmtName in fallbackFormats {
+                let forcedFmt = av_find_input_format(fmtName)
+                guard forcedFmt != nil else { continue }
+                avformat_close_input(&self.formatCtx)
+                self.formatCtx = avformat_alloc_context()
+                guard let retryCtx = self.formatCtx else { continue }
+                retryCtx.pointee.interrupt_callback = interruptCB
+                if let probesize = options.probesize {
+                    retryCtx.pointee.probesize = probesize
+                }
+                if let maxAnalyzeDuration = options.maxAnalyzeDuration {
+                    retryCtx.pointee.max_analyze_duration = maxAnalyzeDuration
+                }
+                var retryOptions = options.formatContextOptions.avOptions
+                result = avformat_open_input(&self.formatCtx, urlString, forcedFmt, &retryOptions)
+                av_dict_free(&retryOptions)
+                if result == 0 {
+                    KSLog("[MEPlayerItem] Fallback format '\(fmtName)' succeeded for \(urlString)")
+                    break
+                }
+            }
+        }
         guard result == 0 else {
             error = .init(errorCode: .formatOpenInput, avErrorCode: result)
             avformat_close_input(&self.formatCtx)
+            return
+        }
+        // Re-bind after potential fallback retry (self.formatCtx may have been reallocated)
+        guard let formatCtx = self.formatCtx else {
+            error = NSError(errorCode: .formatCreate)
             return
         }
         options.openTime = CACurrentMediaTime()
