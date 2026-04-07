@@ -21,6 +21,7 @@ class VideoToolboxDecode: DecodeProtocol {
     private var startTime = Int64(0)
     private var lastPosition = Int64(0)
     private var needReconfig = false
+    private var needKeyFrame = false
 
     init(options: KSOptions, session: DecompressionSession) {
         self.options = options
@@ -36,6 +37,15 @@ class VideoToolboxDecode: DecodeProtocol {
         }
         guard let corePacket = packet.corePacket?.pointee, let data = corePacket.data else {
             return
+        }
+        // After seek/flush, skip non-keyframe packets to avoid VTB BadData errors.
+        // MPEG-TS byte-seek may land on non-keyframe; VTB can't decode without a reference keyframe.
+        if needKeyFrame {
+            if packet.isKeyFrame {
+                needKeyFrame = false
+            } else {
+                return
+            }
         }
         do {
             let sampleBuffer = try session.formatDescription.getSampleBuffer(isConvertNALSize: session.assetTrack.isConvertNALSize, data: data, size: Int(corePacket.size))
@@ -94,8 +104,12 @@ class VideoToolboxDecode: DecodeProtocol {
     }
 
     func doFlushCodec() {
+        // Wait for all in-flight async frames to complete before resetting state.
+        // Without this, stale frames from before seek may still be in the VT pipeline.
+        VTDecompressionSessionWaitForAsynchronousFrames(session.decompressionSession)
         lastPosition = 0
         startTime = 0
+        needKeyFrame = true
     }
 
     func shutdown() {
