@@ -9,6 +9,7 @@ import AVFoundation
 import Foundation
 import Libavcodec
 import Libavformat
+import Libavutil
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -25,6 +26,7 @@ public class ThumbnailController {
     public weak var delegate: ThumbnailControllerDelegate?
     private let thumbnailCount: Int
     private let formatContextOptions: [String: Any]?
+    public private(set) var debugLogs: [String] = []
     public init(thumbnailCount: Int = 100, formatContextOptions: [String: Any]? = nil) {
         self.thumbnailCount = thumbnailCount
         self.formatContextOptions = formatContextOptions
@@ -35,6 +37,9 @@ public class ThumbnailController {
             try getPeeks(for: url, thumbWidth: thumbWidth)
         }.value
     }
+
+    private static let logLock = NSLock()
+    private static var capturedLogs: [String] = []
 
     private func getPeeks(for url: URL, thumbWidth: Int32 = 240) throws -> [FFThumbnail] {
         let urlString: String
@@ -49,8 +54,34 @@ public class ThumbnailController {
             avformat_close_input(&formatCtx)
         }
         var avOptions = formatContextOptions?.avOptions
+
+        // DEBUG: capture FFmpeg internal logs during avformat_open_input
+        ThumbnailController.logLock.lock()
+        ThumbnailController.capturedLogs.removeAll()
+        ThumbnailController.logLock.unlock()
+        let prevLevel = av_log_get_level()
+        av_log_set_level(AV_LOG_TRACE)
+        av_log_set_callback { _, level, format, args in
+            guard let format else { return }
+            var log = String(cString: format)
+            if let args {
+                log = NSString(format: log, arguments: args) as String
+            }
+            log = log.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !log.isEmpty else { return }
+            ThumbnailController.logLock.lock()
+            ThumbnailController.capturedLogs.append("[\(level)] \(log)")
+            ThumbnailController.logLock.unlock()
+        }
+
         var result = avformat_open_input(&formatCtx, urlString, nil, &avOptions)
+        av_log_set_level(prevLevel)
         av_dict_free(&avOptions)
+
+        ThumbnailController.logLock.lock()
+        debugLogs = ThumbnailController.capturedLogs
+        ThumbnailController.logLock.unlock()
+
         guard result == 0, let formatCtx else {
             throw NSError(errorCode: .formatOpenInput, avErrorCode: result)
         }
@@ -82,7 +113,6 @@ public class ThumbnailController {
         }
         let thumbHeight = thumbWidth * codecContext.pointee.height / codecContext.pointee.width
         let reScale = VideoSwresample(dstWidth: thumbWidth, dstHeight: thumbHeight, isDovi: false)
-//        let duration = formatCtx.pointee.duration
         // 因为是针对视频流来进行seek。所以不能直接取formatCtx的duration
         let duration = av_rescale_q(formatCtx.pointee.duration,
                                     AVRational(num: 1, den: AV_TIME_BASE), videoStream.pointee.time_base)
