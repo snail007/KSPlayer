@@ -491,11 +491,7 @@ extension MEPlayerItem {
                 var increase = Int64(seekTime + startTime.seconds - time.seconds)
                 var seekFlags = options.seekFlags
                 let timeStamp: Int64
-                // MARK: Use video stream index for seek to improve keyframe accuracy on MPEG-TS
-                let videoAssetTrack = assetTracks.first(where: { $0.mediaType == .video && $0.isEnabled })
-                let seekStreamIndex: Int32
                 if seekByBytes {
-                    seekStreamIndex = -1
                     seekFlags |= AVSEEK_FLAG_BYTE
                     if let bitRate = formatCtx?.pointee.bit_rate {
                         increase = increase * bitRate / 8
@@ -513,21 +509,16 @@ extension MEPlayerItem {
                         position = avio_tell(formatCtx?.pointee.pb)
                     }
                     timeStamp = position + increase
-                } else if let videoAssetTrack {
-                    seekStreamIndex = videoAssetTrack.trackID
-                    let tb = videoAssetTrack.timebase
-                    let targetSeconds = time.seconds + Double(seekTime + startTime.seconds - time.seconds)
-                    timeStamp = Int64(targetSeconds * Double(tb.den) / Double(tb.num))
-                    increase = Int64((seekTime + startTime.seconds - time.seconds) * Double(tb.den) / Double(tb.num))
                 } else {
-                    seekStreamIndex = -1
                     increase *= Int64(AV_TIME_BASE)
                     timeStamp = Int64(time.seconds) * Int64(AV_TIME_BASE) + increase
                 }
                 let seekMin = increase > 0 ? timeStamp - increase + 2 : Int64.min
                 let seekMax = increase < 0 ? timeStamp - increase - 2 : Int64.max
+                // can not seek to key frame
                 let seekStartTime = CACurrentMediaTime()
-                var result = avformat_seek_file(formatCtx, seekStreamIndex, seekMin, timeStamp, seekMax, seekFlags)
+                var result = avformat_seek_file(formatCtx, -1, seekMin, timeStamp, seekMax, seekFlags)
+//                var result = av_seek_frame(formatCtx, -1, timeStamp, seekFlags)
                 // When seeking before the beginning of the file, and seeking fails,
                 // try again without the backwards flag to make it seek to the
                 // beginning.
@@ -535,7 +526,7 @@ extension MEPlayerItem {
                     KSLog("seek to \(seekToTime) failed. seekFlags remove BACKWARD")
                     options.seekFlags &= ~AVSEEK_FLAG_BACKWARD
                     seekFlags &= ~AVSEEK_FLAG_BACKWARD
-                    result = avformat_seek_file(formatCtx, seekStreamIndex, seekMin, timeStamp, seekMax, seekFlags)
+                    result = avformat_seek_file(formatCtx, -1, seekMin, timeStamp, seekMax, seekFlags)
                 }
                 KSLog("seek to \(seekToTime) spend Time: \(CACurrentMediaTime() - seekStartTime)")
                 if state == .closed {
@@ -892,10 +883,6 @@ extension MEPlayerItem: OutputRenderSourceDelegate {
     }
 
     public func getAudioOutputRender() -> AudioFrame? {
-        // MARK: Audio waits for video after seek — avoid audio-ahead-of-video on long-GOP streams
-        if isSeek, let videoTrack, videoTrack.frameCount == 0 {
-            return nil
-        }
         if let frame = audioTrack?.getOutputRender(where: nil) {
             SubtitleModel.audioRecognizes.first {
                 $0.isEnabled
