@@ -54,6 +54,7 @@ public class ThumbnailController {
         guard result == 0, let formatCtx else {
             throw NSError(errorCode: .formatOpenInput, avErrorCode: result)
         }
+        formatCtx.pointee.flags |= AVFMT_FLAG_GENPTS
         result = avformat_find_stream_info(formatCtx, nil)
         guard result == 0 else {
             throw NSError(errorCode: .formatFindStreamInfo, avErrorCode: result)
