@@ -70,6 +70,12 @@ public final class MetalPlayView: UIView, VideoOutput {
 
     private let metalView = MetalView()
     public weak var displayLayerDelegate: DisplayLayerDelegate?
+
+    // MARK: - Diagnostic / fix for black screen when view not yet in window
+    private var drawLogCounter: Int = 0
+    private var pendingPlay = false
+    private var hasLoggedWindowAttach = false
+
     public init(options: KSOptions) {
         self.options = options
         super.init(frame: .zero)
@@ -84,11 +90,38 @@ public final class MetalPlayView: UIView, VideoOutput {
     }
 
     public func play() {
-        displayLink.isPaused = false
+        if window != nil {
+            displayLink.isPaused = false
+            pendingPlay = false
+        } else {
+            // View not in window yet — defer displayLink start until didMoveToWindow
+            pendingPlay = true
+            KSLog("[video] MetalPlayView.play() deferred: view not in window yet")
+        }
     }
 
     public func pause() {
+        pendingPlay = false
         displayLink.isPaused = true
+    }
+
+    override public func didMoveToWindow() {
+        super.didMoveToWindow()
+        if let w = window {
+            if !hasLoggedWindowAttach {
+                KSLog("[video] MetalPlayView didMoveToWindow: attached window=\(w) bounds=\(bounds) frame=\(frame)")
+                hasLoggedWindowAttach = true
+            }
+            if pendingPlay {
+                pendingPlay = false
+                displayLink.isPaused = false
+                KSLog("[video] MetalPlayView: deferred play() now activated after window attach")
+                // Force render one frame immediately so AVSampleBufferDisplayLayer has content
+                draw(force: true)
+            }
+        } else {
+            KSLog("[video] MetalPlayView didMoveToWindow: detached from window")
+        }
     }
 
     @available(*, unavailable)
@@ -176,6 +209,13 @@ extension MetalPlayView {
             pixelBuffer = frame.corePixelBuffer
             guard let pixelBuffer else {
                 return
+            }
+            drawLogCounter += 1
+            if drawLogCounter <= 3 || drawLogCounter % 300 == 0 {
+                let inWindow = window != nil
+                let layerStatus = displayView.displayLayer.status.rawValue
+                let ready = displayView.displayLayer.isReadyForMoreMediaData
+                KSLog("[video] MetalPlayView.draw #\(drawLogCounter) force=\(force) inWindow=\(inWindow) bounds=\(bounds) displayHidden=\(displayView.isHidden) layerStatus=\(layerStatus) ready=\(ready)")
             }
             isDovi = frame.isDovi
             fps = frame.fps
