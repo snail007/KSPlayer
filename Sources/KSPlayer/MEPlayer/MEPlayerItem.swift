@@ -30,10 +30,8 @@ public final class MEPlayerItem: Sendable {
     private var videoClock = KSClock()
     private var isFirst = true
     private var isSeek = false
-    // MARK: Approach H — block audio until video renders first frame after seek, re-seek if keyframe too far
+    // MARK: Approach H — block audio until video renders first frame after seek
     private var isWaitingVideoAfterSeek = false
-    private var seekTargetTime = TimeInterval(0)
-    private var reseekCount = 0
     private var allPlayerItemTracks = [PlayerItemTrackProtocol]()
     private var maxFrameDuration = 10.0
     private var videoAudioTracks = [CapacityProtocol]()
@@ -541,11 +539,7 @@ extension MEPlayerItem {
                 }
                 isSeek = true
                 if videoTrack != nil {
-                    if !isWaitingVideoAfterSeek {
-                        reseekCount = 0
-                    }
                     isWaitingVideoAfterSeek = true
-                    seekTargetTime = seekToTime
                 }
                 allPlayerItemTracks.forEach { $0.seek(time: seekToTime) }
                 DispatchQueue.main.async { [weak self] in
@@ -747,10 +741,7 @@ extension MEPlayerItem: CodecCapacityDelegate {
         delegate?.sourceDidChange(loadingState: loadingState)
         if loadingState.isPlayable {
             isFirst = false
-            // MARK: Approach H fix — keep isSeek=true until first video frame renders
-            if !isWaitingVideoAfterSeek {
-                isSeek = false
-            }
+            isSeek = false
             if loadingState.loadedTime > options.maxBufferDuration {
                 adaptableVideo(loadingState: loadingState)
                 pause()
@@ -843,10 +834,6 @@ extension MEPlayerItem: OutputRenderSourceDelegate {
 //        print("[audio] setAudio: \(time.seconds)")
         // 切换到主线程的话，那播放起来会更顺滑
         runOnMainThread {
-            // MARK: Approach H fix — block audioClock updates until first video frame syncs clocks
-            if self.isWaitingVideoAfterSeek {
-                return
-            }
             self.audioClock.time = time
             self.audioClock.position = position
         }
@@ -906,22 +893,11 @@ extension MEPlayerItem: OutputRenderSourceDelegate {
             }
         }
         if let frame, isWaitingVideoAfterSeek {
-            let videoTime = frame.cmtime
-            let keyframeSeconds = videoTime.seconds - startTime.seconds
-            let diff = abs(keyframeSeconds - seekTargetTime)
-            KSLog("[seek] video first frame at \(keyframeSeconds)s, target was \(seekTargetTime)s, diff=\(diff)s, reseekCount=\(reseekCount)")
-            if diff > 5.0, reseekCount < 1 {
-                // MARK: Re-seek to keyframe position so audio+video align naturally
-                reseekCount += 1
-                KSLog("[seek] re-seeking to keyframe position \(keyframeSeconds)s")
-                seek(time: keyframeSeconds) { _ in }
-                return nil
-            }
             isWaitingVideoAfterSeek = false
-            isSeek = false
+            let videoTime = frame.cmtime
             audioClock.time = videoTime
             videoClock.time = videoTime
-            KSLog("[seek] synced clocks to \(keyframeSeconds)s, unblocking audio")
+            KSLog("[seek] video first frame at \(videoTime.seconds)s after seek, synced clocks, unblocking audio")
         }
         return frame
     }
