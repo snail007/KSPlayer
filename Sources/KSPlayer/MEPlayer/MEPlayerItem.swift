@@ -32,6 +32,7 @@ public final class MEPlayerItem: Sendable {
     private var isSeek = false
     // MARK: Approach H — block audio until video renders first frame after seek
     private var isWaitingVideoAfterSeek = false
+    private var audioSeekSyncTime: Double = 0
     private var allPlayerItemTracks = [PlayerItemTrackProtocol]()
     private var maxFrameDuration = 10.0
     private var videoAudioTracks = [CapacityProtocol]()
@@ -489,6 +490,7 @@ extension MEPlayerItem {
             }
             if state == .seeking {
                 isSeek = true
+                audioSeekSyncTime = 0
                 let seekToTime = seekTime
                 let time = mainClock().time
                 var increase = Int64(seekTime + startTime.seconds - time.seconds)
@@ -896,6 +898,7 @@ extension MEPlayerItem: OutputRenderSourceDelegate {
         if let frame, isWaitingVideoAfterSeek {
             isWaitingVideoAfterSeek = false
             let videoTime = frame.cmtime
+            audioSeekSyncTime = videoTime.seconds
             audioClock.time = videoTime
             videoClock.time = videoTime
             KSLog("[seek] video first frame at \(videoTime.seconds)s after seek, synced clocks, unblocking audio")
@@ -908,14 +911,19 @@ extension MEPlayerItem: OutputRenderSourceDelegate {
         if isWaitingVideoAfterSeek {
             return nil
         }
-        if let frame = audioTrack?.getOutputRender(where: nil) {
+        while let frame = audioTrack?.getOutputRender(where: nil) {
+            if audioSeekSyncTime > 0 {
+                if frame.cmtime.seconds < audioSeekSyncTime - 0.05 {
+                    continue
+                }
+                audioSeekSyncTime = 0
+            }
             SubtitleModel.audioRecognizes.first {
                 $0.isEnabled
             }?.append(frame: frame)
             return frame
-        } else {
-            return nil
         }
+        return nil
     }
 }
 
