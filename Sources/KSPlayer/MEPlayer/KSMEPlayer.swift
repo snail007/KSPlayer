@@ -242,7 +242,7 @@ extension KSMEPlayer: MEPlayerDelegate {
             playableTime = currentPlaybackTime + loadingState.loadedTime
         }
         if loadState == .playable {
-            if !loadingState.isEndOfFile, loadingState.frameCount == 0, loadingState.packetCount == 0, options.preferredForwardBufferDuration != 0 {
+            if !loadingState.isEndOfFile, !loadingState.isSeek, loadingState.frameCount == 0, loadingState.packetCount == 0, options.preferredForwardBufferDuration != 0 {
                 loadState = .loading
                 if playbackState == .playing {
                     runOnMainThread { [weak self] in
@@ -285,6 +285,14 @@ extension KSMEPlayer: MEPlayerDelegate {
 
     func sourceDidChange(oldBitRate: Int64, newBitrate: Int64) {
         KSLog("oldBitRate \(oldBitRate) change to newBitrate \(newBitrate)")
+    }
+
+    func sourceDidUnblockAudioAfterSeek() {
+        KSLog("[seek] audio unblocked after video first frame, restarting audio output")
+        audioOutput.flush()
+        if playbackState == .playing {
+            audioOutput.play()
+        }
     }
 }
 

@@ -45,6 +45,7 @@ protocol MEPlayerDelegate: AnyObject {
     func sourceDidFailed(error: NSError?)
     func sourceDidFinished()
     func sourceDidChange(oldBitRate: Int64, newBitrate: Int64)
+    func sourceDidUnblockAudioAfterSeek()
 }
 
 // MARK: protocol

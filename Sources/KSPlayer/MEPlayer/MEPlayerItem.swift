@@ -898,6 +898,7 @@ extension MEPlayerItem: OutputRenderSourceDelegate {
             audioClock.time = videoTime
             videoClock.time = videoTime
             KSLog("[seek] video first frame at \(videoTime.seconds)s after seek, synced clocks, unblocking audio")
+            delegate?.sourceDidUnblockAudioAfterSeek()
         }
         return frame
     }
