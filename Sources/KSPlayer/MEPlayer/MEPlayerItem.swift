@@ -488,6 +488,7 @@ extension MEPlayerItem {
                 condition.wait()
             }
             if state == .seeking {
+                isSeek = true
                 let seekToTime = seekTime
                 let time = mainClock().time
                 var increase = Int64(seekTime + startTime.seconds - time.seconds)
@@ -515,8 +516,8 @@ extension MEPlayerItem {
                     increase *= Int64(AV_TIME_BASE)
                     timeStamp = Int64(time.seconds) * Int64(AV_TIME_BASE) + increase
                 }
-                let seekMin = increase > 0 ? timeStamp - increase + 2 : Int64.min
-                let seekMax = increase < 0 ? timeStamp - increase - 2 : Int64.max
+                let seekMin = Int64.min
+                let seekMax = Int64.max
                 // can not seek to key frame
                 let seekStartTime = CACurrentMediaTime()
                 var result = avformat_seek_file(formatCtx, -1, seekMin, timeStamp, seekMax, seekFlags)
